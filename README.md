@@ -142,6 +142,8 @@ curl -X POST https://api.ltx.video/v1/image-to-video \
 4.  **Generate Images**: Use **nanobanan 2** or **seedreams** to create your starting visuals and place them in `images/`.
 5.  **Run Generation**: Use the Python script below or the curl examples above.
 
+`requirements.txt` is currently empty of third-party libraries, so you can also run the script directly with system `python3` if you prefer.
+
 ---
 
 ## Project Structure

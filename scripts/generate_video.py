@@ -7,10 +7,11 @@ import mimetypes
 import os
 import sys
 from datetime import datetime
+from email.message import Message
 from pathlib import Path
 from typing import Any
-
-import requests
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 API_BASE_URL = "https://api.ltx.video"
@@ -133,19 +134,45 @@ def build_payload(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     return IMAGE_TO_VIDEO_PATH, payload
 
 
-def describe_error(response: requests.Response) -> str:
-    content_type = response.headers.get("Content-Type", "")
+def describe_error_body(body: bytes, headers: Message, status_code: int) -> str:
+    content_type = headers.get("Content-Type", "")
     if "application/json" in content_type:
         try:
-            data = response.json()
+            data = json.loads(body.decode("utf-8"))
             return json.dumps(data, indent=2)
-        except ValueError:
+        except (ValueError, UnicodeDecodeError):
             pass
-    return response.text.strip() or f"HTTP {response.status_code}"
+
+    try:
+        text = body.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        text = ""
+
+    return text or f"HTTP {status_code}"
 
 
-def save_video(response: requests.Response, output_path: Path) -> None:
-    output_path.write_bytes(response.content)
+def send_request(api_key: str, endpoint_path: str, payload: dict[str, Any], timeout: int) -> tuple[bytes, Message]:
+    request = Request(
+        url=f"{API_BASE_URL}{endpoint_path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.read(), response.headers
+    except HTTPError as error:
+        body = error.read()
+        raise SystemExit(
+            f"LTX request failed with {error.code}:\n"
+            f"{describe_error_body(body, error.headers, error.code)}"
+        ) from error
+    except URLError as error:
+        raise SystemExit(f"Network error while calling LTX API: {error.reason}") from error
 
 
 def main() -> int:
@@ -155,23 +182,9 @@ def main() -> int:
     output_path = build_output_path(args.output)
     endpoint_path, payload = build_payload(args)
 
-    response = requests.post(
-        f"{API_BASE_URL}{endpoint_path}",
-        headers={
-            "Authorization": f"Bearer {get_api_key()}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=args.timeout,
-    )
-
-    if not response.ok:
-        raise SystemExit(
-            f"LTX request failed with {response.status_code}:\n{describe_error(response)}"
-        )
-
-    save_video(response, output_path)
-    request_id = response.headers.get("x-request-id", "unknown")
+    video_bytes, headers = send_request(get_api_key(), endpoint_path, payload, args.timeout)
+    output_path.write_bytes(video_bytes)
+    request_id = headers.get("x-request-id", "unknown")
     print(f"Saved video to {output_path}")
     print(f"x-request-id: {request_id}")
     return 0
